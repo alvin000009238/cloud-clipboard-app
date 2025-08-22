@@ -302,7 +302,8 @@ const ClipboardItem = ({ item, onDelete, onTogglePin }) => {
           </div>
           
           <div className="flex-grow flex items-center">
-             <p className="text-gray-200 break-words text-base leading-relaxed">
+             {/* ** UPDATED: Use truncate for long file names ** */}
+             <p className="text-gray-200 break-all text-base leading-relaxed truncate">
                 {item.content}
               </p>
           </div>
@@ -396,11 +397,10 @@ const ClipboardApp = ({ user, onLogout }) => {
   const handleFileUpload = async (file) => {
     if (!file || !userId) return;
     
-    // ** NEW: File size check **
     const MAX_SIZE_MB = 50;
     if (file.size > MAX_SIZE_MB * 1024 * 1024) {
       setUploadError(`檔案大小超過 ${MAX_SIZE_MB}MB 的限制。`);
-      setTimeout(() => setUploadError(''), 5000); // Clear error after 5 seconds
+      setTimeout(() => setUploadError(''), 5000);
       return;
     }
 
@@ -415,7 +415,6 @@ const ClipboardApp = ({ user, onLogout }) => {
 
     uploadTask.on('state_changed', 
       (snapshot) => {
-        // ** NEW: Update progress **
         const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
         setUploadProgress(progress);
       }, 
