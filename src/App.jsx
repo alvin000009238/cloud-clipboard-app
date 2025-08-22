@@ -126,6 +126,12 @@ const EyeIcon = (props) => (
     <path strokeLinecap="round" strokeLinejoin="round" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
   </svg>
 );
+// ** NEW: Video Icon **
+const VideoCameraIcon = (props) => (
+    <svg {...props} xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+    </svg>
+);
 
 
 // --- Firebase Not Configured Component ---
@@ -277,6 +283,8 @@ const ClipboardItem = ({ item, onDelete, onTogglePin }) => {
     switch(item.type) {
         case 'text': return <TextIcon className="w-6 h-6 text-blue-400" />;
         case 'image': return <ImageIcon className="w-6 h-6 text-green-400" />;
+        // ** NEW: Video icon **
+        case 'video': return <VideoCameraIcon className="w-6 h-6 text-orange-400" />;
         case 'file': return <FileIcon className="w-6 h-6 text-purple-400" />;
         default: return null;
     }
@@ -302,7 +310,6 @@ const ClipboardItem = ({ item, onDelete, onTogglePin }) => {
           </div>
           
           <div className="flex-grow flex items-center">
-             {/* ** UPDATED: Use truncate for long file names ** */}
              <p className="text-gray-200 break-all text-base leading-relaxed truncate">
                 {item.content}
               </p>
@@ -316,7 +323,7 @@ const ClipboardItem = ({ item, onDelete, onTogglePin }) => {
                 {copied ? <CheckIcon className="w-5 h-5 text-green-400" /> : <CopyIcon className="w-5 h-5" />}
               </button>
             )}
-            {item.type === 'file' && (
+            {(item.type === 'file' || item.type === 'video') && (
               <button onClick={handleDownload} className="p-2 rounded-full bg-gray-700 text-gray-400 hover:bg-gray-600 hover:text-white transition-colors" title="下載檔案">
                 <DownloadIcon className="w-5 h-5" />
               </button>
@@ -356,6 +363,17 @@ const UploadProgress = ({ fileName, progress }) => (
     <p className="text-sm text-blue-400 text-center mt-2">{Math.round(progress)}%</p>
   </div>
 );
+
+// ** NEW: Helper function to determine file type **
+const getFileType = (file) => {
+    if (file.type.startsWith('image/')) {
+        return 'image';
+    }
+    if (file.type.startsWith('video/')) {
+        return 'video';
+    }
+    return 'file';
+};
 
 const ClipboardApp = ({ user, onLogout }) => {
   const [items, setItems] = useState([]);
@@ -426,7 +444,8 @@ const ClipboardApp = ({ user, onLogout }) => {
       async () => {
         const downloadURL = await getDownloadURL(uploadTask.snapshot.ref);
         const collectionPath = `/artifacts/${appId}/users/${userId}/clipboard`;
-        await addDoc(collection(db, collectionPath), { type: file.type.startsWith('image/') ? 'image' : 'file', content: file.name, downloadURL: downloadURL, storagePath: storagePath, pinned: false, timestamp: serverTimestamp() });
+        // ** UPDATED: Use helper function for file type **
+        await addDoc(collection(db, collectionPath), { type: getFileType(file), content: file.name, downloadURL: downloadURL, storagePath: storagePath, pinned: false, timestamp: serverTimestamp() });
         setUploading(false);
       }
     );
