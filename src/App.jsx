@@ -346,6 +346,16 @@ const WelcomeModal = ({ onClose }) => (
   </div>
 );
 
+const UploadProgress = ({ fileName, progress }) => (
+  <div className="w-full px-4">
+    <p className="text-sm text-gray-300 mb-2 truncate">{fileName}</p>
+    <div className="w-full bg-gray-700 rounded-full h-2.5">
+      <div className="bg-blue-600 h-2.5 rounded-full" style={{ width: `${progress}%` }}></div>
+    </div>
+    <p className="text-sm text-blue-400 text-center mt-2">{Math.round(progress)}%</p>
+  </div>
+);
+
 const ClipboardApp = ({ user, onLogout }) => {
   const [items, setItems] = useState([]);
   const [loadingItems, setLoadingItems] = useState(true);
@@ -353,6 +363,9 @@ const ClipboardApp = ({ user, onLogout }) => {
   const [searchTerm, setSearchTerm] = useState('');
   const [textInput, setTextInput] = useState('');
   const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [uploadingFileName, setUploadingFileName] = useState('');
+  const [uploadError, setUploadError] = useState('');
   const fileInputRef = useRef(null);
   
   const userId = user?.uid;
@@ -382,11 +395,35 @@ const ClipboardApp = ({ user, onLogout }) => {
 
   const handleFileUpload = async (file) => {
     if (!file || !userId) return;
+    
+    // ** NEW: File size check **
+    const MAX_SIZE_MB = 50;
+    if (file.size > MAX_SIZE_MB * 1024 * 1024) {
+      setUploadError(`檔案大小超過 ${MAX_SIZE_MB}MB 的限制。`);
+      setTimeout(() => setUploadError(''), 5000); // Clear error after 5 seconds
+      return;
+    }
+
     setUploading(true);
+    setUploadProgress(0);
+    setUploadingFileName(file.name);
+    setUploadError('');
+
     const storagePath = `/artifacts/${appId}/users/${userId}/files/${Date.now()}_${file.name}`;
     const storageRef = ref(storage, storagePath);
     const uploadTask = uploadBytesResumable(storageRef, file);
-    uploadTask.on('state_changed', (snapshot) => {}, (error) => { console.error("Upload failed:", error); setUploading(false); },
+
+    uploadTask.on('state_changed', 
+      (snapshot) => {
+        // ** NEW: Update progress **
+        const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
+        setUploadProgress(progress);
+      }, 
+      (error) => {
+        console.error("Upload failed:", error);
+        setUploadError('上傳失敗，請稍後再試。');
+        setUploading(false);
+      },
       async () => {
         const downloadURL = await getDownloadURL(uploadTask.snapshot.ref);
         const collectionPath = `/artifacts/${appId}/users/${userId}/clipboard`;
@@ -426,9 +463,18 @@ const ClipboardApp = ({ user, onLogout }) => {
       <main className="flex-grow w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
           <form onSubmit={handleAddText} className="bg-gray-800 border border-gray-700 rounded-xl p-4"><input type="text" value={textInput} onChange={(e) => setTextInput(e.target.value)} placeholder="貼上文字後按 Enter 新增..." className="w-full bg-transparent text-white placeholder-gray-500 focus:outline-none" /></form>
-          <div onDragOver={onDragOver} onDrop={onDrop} onClick={triggerFileSelect} className="flex flex-col items-center justify-center border-2 border-dashed border-gray-600 rounded-xl p-6 text-center bg-gray-800/50 hover:border-blue-500 hover:bg-gray-800 transition-colors cursor-pointer">
+          <div onDragOver={onDragOver} onDrop={onDrop} onClick={!uploading ? triggerFileSelect : undefined} className={`flex flex-col items-center justify-center border-2 border-dashed border-gray-600 rounded-xl p-6 text-center bg-gray-800/50 transition-colors ${!uploading ? 'hover:border-blue-500 hover:bg-gray-800 cursor-pointer' : ''}`}>
             <input type="file" ref={fileInputRef} onChange={onFileSelected} className="hidden" />
-            {uploading ? (<><svg className="animate-spin h-8 w-8 text-blue-400 mb-2" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg><p className="text-gray-400">上傳中...</p></>) : (<><UploadIcon className="w-8 h-8 text-gray-500 mb-2" /><p className="text-gray-400"><span className="font-semibold text-blue-400">選擇一個檔案</span> 或拖曳到此處</p><p className="text-xs text-gray-500 mt-1">最大 50MB</p></>)}
+            {uploading ? (
+                <UploadProgress fileName={uploadingFileName} progress={uploadProgress} />
+            ) : (
+                <>
+                    <UploadIcon className="w-8 h-8 text-gray-500 mb-2" />
+                    <p className="text-gray-400"><span className="font-semibold text-blue-400">選擇一個檔案</span> 或拖曳到此處</p>
+                    <p className="text-xs text-gray-500 mt-1">最大 50MB</p>
+                    {uploadError && <p className="text-red-400 text-sm mt-2">{uploadError}</p>}
+                </>
+            )}
           </div>
         </div>
         <div className="relative mb-8"><div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none"><SearchIcon className="h-5 w-5 text-gray-500" /></div><input type="text" placeholder="搜尋您的剪貼簿..." value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} className="w-full bg-gray-800 border border-gray-700 rounded-lg py-3 pl-12 pr-4 text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500" /></div>
