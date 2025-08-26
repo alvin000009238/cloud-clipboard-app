@@ -20,7 +20,7 @@
 
 ### 後端與資料庫 (Firebase)：
 * Firebase Authentication - 處理使用者註冊、登入和驗證。
-* Cloud Firestore - 用於即時儲存和同步文字資料。
+* Cloud Firestore Database - 用於即時儲存和同步文字資料。
 * Cloud Storage for Firebase - 用於儲存使用者上傳的檔案（圖片、影片等）。
 * Firebase Hosting - 用於部署和託管網站。
 
@@ -57,7 +57,30 @@ VITE_FIREBASE_MESSAGING_SENDER_ID="YOUR_MESSAGING_SENDER_ID"
 VITE_FIREBASE_APP_ID="YOUR_APP_ID"
 ```
 ### 4. 設定 Firebase 安全規則
-   * 請務必在您的 Firebase 控制台中，為 Firestore 和 Storage 設定正確的安全規則，以確保只有已登入的使用者可以存取自己的資料。
+   * 請務必在您的 Firebase 控制台中，為 Firestore Database 和 Storage 設定正確的安全規則，以確保只有已登入的使用者可以存取自己的資料。
+```sh
+// Firestore Database 規則
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /artifacts/{appId}/users/{userId}/{document=**} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+  }
+}
+```
+```sh
+// Storage 規則
+rules_version = '2';
+service firebase.storage {
+	match /b/{bucket}/o {
+		match /artifacts/{appId}/users/{userId}/{allPaths=**} {
+			allow read, write, delete: if request.auth != null && request.auth.uid == userId;
+		}
+	}
+}
+```
+
 ### 5. 啟動開發伺服器
 ```sh
 npm run dev
