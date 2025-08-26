@@ -1,5 +1,5 @@
 # ☁️ 雲端剪貼簿 (Cloud Clipboard)
-這是一個使用 React 和 Firebase 建立的現代化雲端剪貼簿應用程式。使用者可以輕鬆地在多個裝置間同步文字、圖片和檔案，實現無縫的跨平台工作流程。
+這是一個使用 React 和 Firebase 建立的雲端剪貼簿應用程式。使用者可以輕鬆地在多個裝置間同步文字、圖片和檔案，實現無縫的跨平台工作流程。
 
 ## ✨ 主要功能
 * 跨裝置同步：在任何裝置登入，即可存取您所有的剪貼項目。
@@ -31,7 +31,7 @@ GitHub Actions - 自動化打包專案並部署到 Firebase Hosting。
 請依照以下步驟操作：
 ### 1. 前置需求
    * 已安裝 Node.js (建議版本 v16 或以上)。
-   * 擁有一個 Firebase 專案。
+   * 新建一個 Firebase 專案。
 ### 2. 複製並安裝專案
 
 ```sh
@@ -40,7 +40,7 @@ git clone [https://github.com/alvin000009238/cloud-clipboard-app.git]
 ```
 ```sh
 # 進入專案資料夾
-cd your-repository-name
+cd cloud-clipboard-app
 ```
 ```sh
 # 安裝所有依賴套件
@@ -62,4 +62,4 @@ VITE_FIREBASE_APP_ID="YOUR_APP_ID"
 ```sh
 npm run dev
 ```
-應用程式將會在 `http://localhost:5173` (或指定的埠號) 上執行。部署這個專案已設定好使用 GitHub Actions 進行自動化部署。只要有新的提交被推送到 `main` 分支，就會自動觸發部署流程，將最新的版本發布到 Firebase Hosting。
+應用程式將會在 `http://localhost:5173` 上執行。
