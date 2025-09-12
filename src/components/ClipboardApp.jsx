@@ -88,7 +88,7 @@ const ClipboardApp = ({ user, onLogout, db, storage, appId }) => {
     setUploadingFileName(file.name);
     setUploadError('');
 
-    const storagePath = `/artifacts/${appId}/users/${userId}/files/${Date.now()}_${file.name}`;
+    const storagePath = `/artifacts/${appId}/users/${userId}/files/${crypto.randomUUID()}_${file.name}`;
     const storageRef = ref(storage, storagePath);
     const uploadTask = uploadBytesResumable(storageRef, file);
 
