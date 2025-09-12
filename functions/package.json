@@ -1,0 +1,10 @@
+{
+  "name": "cloud-clipboard-functions",
+  "main": "index.js",
+  "private": true,
+  "dependencies": {
+    "@simplewebauthn/server": "^13.1.2",
+    "firebase-admin": "^11.10.1",
+    "firebase-functions": "^4.4.1"
+  }
+}
