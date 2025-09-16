@@ -11,6 +11,7 @@
 * 安全驗證：使用 Firebase Authentication 進行安全的電子郵件/密碼註冊和登入。
 * 釘選功能：將重要的項目釘選在最上方，方便快速存取。
 * 快速搜尋：即時篩選，迅速找到您需要的內容。
+* 帳號設定：重設密碼、加入 Passkey 或刪除帳號。
 
 ## 🛠️ 使用的技術
 ### 前端：
@@ -86,3 +87,45 @@ service firebase.storage {
 npm run dev
 ```
 應用程式將會在 `http://localhost:5173` 上執行。
+
+## 🔐 設定 Passkey 與 Cloud Functions
+### 1. 安裝前端套件
+```sh
+npm install @simplewebauthn/browser
+```
+
+### 2. 設定 Functions 與 Firebase
+專案已提供完成的 Cloud Functions 實作（`functions/index.js`），包含：
+
+* RP ID：正式站固定為 `cloud.20090408.xyz`，本機自動切換為 `localhost`。
+* CORS：允許 `https://cloud.20090408.xyz` 與 `http://localhost:5173`，並啟用 `credentials`。
+* Base64URL：所有 WebAuthn 欄位（credentialID、publicKey、signature…）以 Base64URL 存取 Firestore。
+* 挑戰管理：註冊與登入分別儲存挑戰值，驗證成功後即時清除，避免重複使用。
+* 自訂回應：統一回傳 `{ ok, code, message }` 便於前端顯示詳細錯誤。
+
+部署前請先安裝函式依賴並設定 Firebase 專案：
+
+```sh
+npm --prefix functions install
+firebase deploy --only functions
+```
+
+如需指定 Functions 區域，可在 `.env.local` 加入：
+
+```sh
+VITE_FIREBASE_FUNCTIONS_REGION="us-central1"
+```
+
+### 3. 前端呼叫流程
+* 註冊：使用者點擊「加入 Passkey」→ `GET /regOptions` → `startRegistration` → `POST /regVerify`。
+* 登入：按下「使用 Passkey 登入」→ `GET /authOptions?email=...` → `startAuthentication` → `POST /authVerify` → 以 `customToken` 呼叫 `signInWithCustomToken`。
+
+前端 `fetch` 皆設定 `credentials: 'include'`，如需使用 Firebase Session Cookie 可直接延伸；所有錯誤碼會透過 UI 呈現。
+
+### 4. 測試與驗證
+1. 本機測試：以 `npm run dev` 在 `http://localhost:5173` 操作，確認 Functions 端 `rpID` 轉為 `localhost`。
+2. 正式測試：於 `https://cloud.20090408.xyz` 重新註冊與登入，確認 Firestore `users/{uid}/credentials/{credId}` 寫入成功且 `authVerify` 回傳 `customToken`。
+3. 若遇錯誤，可查看 Cloud Functions Logs 以確認 `origin`、`rpID` 與 `challenge` 狀態。
+
+更多細節請參考 [SimpleWebAuthn 文件](https://simplewebauthn.dev/)。
+

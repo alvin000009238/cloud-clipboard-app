@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
-import { createUserWithEmailAndPassword, signInWithEmailAndPassword, sendEmailVerification } from 'firebase/auth';
+import { createUserWithEmailAndPassword, signInWithEmailAndPassword, sendEmailVerification, signInWithCustomToken } from 'firebase/auth';
 import { CloudIcon } from '../icons';
+import { loginWithPasskey } from '../auth/passkey';
 
 const AuthComponent = ({ auth }) => {
   const [isLogin, setIsLogin] = useState(true);
@@ -23,6 +24,21 @@ const AuthComponent = ({ auth }) => {
       }
     } catch (err) {
       setError(getFriendlyErrorMessage(err.code));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handlePasskeyLogin = async () => {
+    setError('');
+    setLoading(true);
+    try {
+      const emailInput = document.getElementById('email');
+      const email = emailInput ? emailInput.value : '';
+      const token = await loginWithPasskey(email);
+      await signInWithCustomToken(auth, token);
+    } catch (err) {
+      setError(err?.message || 'Passkey 登入失敗，請再試一次。');
     } finally {
       setLoading(false);
     }
@@ -72,8 +88,18 @@ const AuthComponent = ({ auth }) => {
               )}
               {loading ? '處理中...' : (isLogin ? '登入' : '註冊')}
             </button>
-          </form>
-          <div className="text-center mt-6">
+              {isLogin && (
+                <button
+                  type="button"
+                  onClick={handlePasskeyLogin}
+                  className={`w-full mt-3 bg-purple-600 hover:bg-purple-700 font-bold py-3 px-4 rounded-lg transition duration-300 transform hover:scale-105 ${loading ? 'opacity-50 cursor-not-allowed' : ''}`}
+                  disabled={loading}
+                >
+                  使用 Passkey 登入
+                </button>
+              )}
+            </form>
+            <div className="text-center mt-6">
             <button onClick={() => { setIsLogin(!isLogin); setError(''); }} className="inline-block align-baseline font-bold text-sm text-blue-400 hover:text-blue-300">
               {isLogin ? '還沒有帳號？ 立即註冊' : '已經有帳號了？ 返回登入'}
             </button>
