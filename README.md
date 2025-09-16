@@ -86,7 +86,9 @@ service firebase.storage {
 ```sh
 npm run dev
 ```
+
 應用程式將會在 `http://localhost:5173` 上執行。
+
 
 ## 🔐 設定 Passkey 與 Cloud Functions
 ### 1. 安裝前端套件
