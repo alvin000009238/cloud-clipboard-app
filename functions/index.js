@@ -11,6 +11,7 @@ admin.initializeApp();
 const db = admin.firestore();
 
 const rpName = 'Cloud Clipboard';
+
 function resolveRpInfo(context, data = {}) {
   const headers = context.rawRequest?.headers || {};
   const originFromData = data.origin;
@@ -67,10 +68,12 @@ exports.generateRegistrationOptions = functions.https.onCall(async (data, contex
   const userDoc = await userRef.get();
   const passkeys = userDoc.exists ? userDoc.data().passkeys || [] : [];
 
+  const userIDBuffer = Buffer.from(uid, 'utf8');
   const options = generateRegistrationOptions({
     rpName,
     rpID,
-    userID: uid,
+    userID: userIDBuffer,
+
     userName: context.auth.token.email || uid,
     attestationType: 'none',
     excludeCredentials: passkeys.map(pk => ({
@@ -79,7 +82,18 @@ exports.generateRegistrationOptions = functions.https.onCall(async (data, contex
     })),
   });
 
-  await userRef.set({ currentChallenge: options.challenge, email: context.auth.token.email }, { merge: true });
+  const { challenge } = options;
+  if (!challenge) {
+    throw new functions.https.HttpsError('internal', '無法建立 Passkey 註冊挑戰');
+  }
+
+  const dataToSet = { currentChallenge: challenge };
+  if (context.auth.token.email) {
+    dataToSet.email = context.auth.token.email;
+  }
+
+  await userRef.set(dataToSet, { merge: true });
+
   return options;
 });
 
@@ -104,11 +118,9 @@ exports.verifyRegistration = functions.https.onCall(async (data, context) => {
     throw new functions.https.HttpsError('failed-precondition', '缺少驗證所需的挑戰，請重新開始註冊流程。');
   }
 
-
   let verification;
   try {
     verification = await verifyRegistrationResponse({
-
       response: data.credential,
 
       expectedChallenge,
@@ -162,7 +174,14 @@ exports.generateAuthenticationOptions = functions.https.onCall(async (data, cont
     })),
     userVerification: 'preferred',
   });
-  await userDoc.ref.update({ currentChallenge: options.challenge });
+
+  const { challenge } = options;
+  if (!challenge) {
+    throw new functions.https.HttpsError('internal', '無法建立 Passkey 登入挑戰');
+  }
+
+  await userDoc.ref.update({ currentChallenge: challenge });
+
   return { options };
 });
 
@@ -181,6 +200,11 @@ exports.verifyAuthentication = functions.https.onCall(async (data, context) => {
   const userDoc = snap.docs[0];
   const user = userDoc.data();
   const expectedChallenge = user.currentChallenge;
+
+  if (!expectedChallenge) {
+    throw new functions.https.HttpsError('failed-precondition', 'Passkey 登入挑戰已過期，請重新操作。');
+  }
+
   const passkey = (user.passkeys || []).find(pk => pk.credentialID === credential.rawId);
   if (!passkey) {
     throw new functions.https.HttpsError('not-found', 'Passkey 未註冊');
