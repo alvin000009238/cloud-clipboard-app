@@ -11,6 +11,7 @@
 * 安全驗證：使用 Firebase Authentication 進行安全的電子郵件/密碼註冊和登入。
 * 釘選功能：將重要的項目釘選在最上方，方便快速存取。
 * 快速搜尋：即時篩選，迅速找到您需要的內容。
+* 帳號設定：重設密碼、加入 Passkey 或刪除帳號。
 
 ## 🛠️ 使用的技術
 ### 前端：
@@ -86,3 +87,26 @@ service firebase.storage {
 npm run dev
 ```
 應用程式將會在 `http://localhost:5173` 上執行。
+
+## 🔐 設定 Passkey 與 Cloud Functions
+### 1. 安裝前端套件
+```sh
+npm install @simplewebauthn/browser
+```
+
+### 2. 建立並部署 Cloud Functions
+專案根目錄已包含 `functions/` 範例程式碼，使用 `@simplewebauthn/server` 產生與驗證挑戰，並將憑證資料寫入 Firestore。
+
+```sh
+# 安裝 Cloud Functions 依賴
+npm --prefix functions install
+
+# 部署 Functions
+firebase deploy --only functions
+```
+
+### 3. 前端使用
+在使用者登入後呼叫 `registerPasskey` 進行 Passkey 註冊；於登入畫面點擊「使用 Passkey 登入」按鈕會呼叫 `loginWithPasskey`，後端驗證成功後回傳 `customToken` 並登入 Firebase。
+
+更多設定與細節可參考 [SimpleWebAuthn 文件](https://simplewebauthn.dev/).
+

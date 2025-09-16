@@ -5,6 +5,7 @@ import { CloudIcon, SearchIcon, UploadIcon } from '../icons';
 import UploadProgress from './UploadProgress';
 import WelcomeModal from './WelcomeModal';
 import ClipboardItem from './ClipboardItem';
+import UserSettings from './UserSettings';
 
 const getFileType = (file) => {
   if (file.type.startsWith('image/')) {
@@ -26,6 +27,7 @@ const ClipboardApp = ({ user, onLogout, db, storage, appId }) => {
   const [uploadProgress, setUploadProgress] = useState(0);
   const [uploadingFileName, setUploadingFileName] = useState('');
   const [uploadError, setUploadError] = useState('');
+  const [showSettings, setShowSettings] = useState(false);
   const fileInputRef = useRef(null);
 
   const userId = user?.uid;
@@ -166,14 +168,15 @@ const ClipboardApp = ({ user, onLogout, db, storage, appId }) => {
               <CloudIcon className="h-8 w-8 text-blue-400" />
               <span className="text-xl font-bold ml-2 text-white">雲端剪貼簿</span>
             </div>
-            <div className="flex items-center gap-4">
-              <span className="text-gray-400 text-sm hidden sm:block">{user.email}</span>
-              <button onClick={onLogout} className="text-sm bg-gray-700 hover:bg-red-600 text-white font-semibold py-2 px-4 rounded-lg transition-colors duration-300">登出</button>
+              <div className="flex items-center gap-4">
+                <span className="text-gray-400 text-sm hidden sm:block">{user.email}</span>
+                <button onClick={() => setShowSettings(true)} className="text-sm bg-gray-700 hover:bg-gray-600 text-white font-semibold py-2 px-4 rounded-lg transition-colors duration-300">設定</button>
+                <button onClick={onLogout} className="text-sm bg-gray-700 hover:bg-red-600 text-white font-semibold py-2 px-4 rounded-lg transition-colors duration-300">登出</button>
+              </div>
             </div>
           </div>
-        </div>
-      </header>
-      <main className="flex-grow w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        </header>
+        <main className="flex-grow w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
           <form onSubmit={handleAddText} className="bg-gray-800 border border-gray-700 rounded-xl p-4">
             <input type="text" value={textInput} onChange={(e) => setTextInput(e.target.value)} placeholder="貼上文字後按 Enter 新增..." className="w-full bg-transparent text-white placeholder-gray-500 focus:outline-none" />
@@ -228,10 +231,11 @@ const ClipboardApp = ({ user, onLogout, db, storage, appId }) => {
             <p className="text-gray-500 mt-2">開始新增一些文字或檔案吧！</p>
           </div>
         )}
-      </main>
-    </div>
-  );
-};
+        </main>
+        {showSettings && <UserSettings user={user} onClose={() => setShowSettings(false)} onLogout={onLogout} />}
+      </div>
+    );
+  };
 
 export default ClipboardApp;
 
