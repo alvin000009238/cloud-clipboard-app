@@ -11,14 +11,58 @@ admin.initializeApp();
 const db = admin.firestore();
 
 const rpName = 'Cloud Clipboard';
+function resolveRpInfo(context, data = {}) {
+  const headers = context.rawRequest?.headers || {};
+  const originFromData = data.origin;
+  const originFromHeader = headers.origin;
+  const forwardedHost = headers['x-forwarded-host'];
+  const host = forwardedHost || headers.host;
+
+  let origin = originFromData || originFromHeader;
+  if (!origin && host) {
+    const isLocal = /localhost|127\.0\.0\.1|\[::1\]/.test(host);
+    const protocol = isLocal ? 'http' : 'https';
+    origin = `${protocol}://${host}`;
+  }
+
+  if (!origin) {
+    throw new functions.https.HttpsError(
+      'invalid-argument',
+      '無法判斷請求來源的 origin，請在請求資料中提供 origin。',
+    );
+  }
+
+  let rpID = data.rpID;
+  if (!rpID) {
+    try {
+      rpID = new URL(origin).hostname;
+    } catch (error) {
+      throw new functions.https.HttpsError(
+        'invalid-argument',
+        '提供的 origin 不是有效的 URL，請確認 origin 或直接提供 rpID。',
+      );
+    }
+  }
+
+  if (!rpID) {
+    throw new functions.https.HttpsError(
+      'invalid-argument',
+      '無法判斷 RP ID，請提供 rpID。',
+    );
+  }
+
+  return { origin, rpID };
+}
+
 
 exports.generateRegistrationOptions = functions.https.onCall(async (data, context) => {
   if (!context.auth) {
     throw new functions.https.HttpsError('unauthenticated', '需要登入才能註冊 Passkey');
   }
   const uid = context.auth.uid;
-  const origin = context.rawRequest.headers.origin;
-  const rpID = new URL(origin).hostname;
+
+  const { origin, rpID } = resolveRpInfo(context, data);
+
   const userRef = db.collection('users').doc(uid);
   const userDoc = await userRef.get();
   const passkeys = userDoc.exists ? userDoc.data().passkeys || [] : [];
@@ -43,17 +87,30 @@ exports.verifyRegistration = functions.https.onCall(async (data, context) => {
   if (!context.auth) {
     throw new functions.https.HttpsError('unauthenticated', '需要登入才能註冊 Passkey');
   }
+
+  if (!data || !data.credential) {
+    throw new functions.https.HttpsError('invalid-argument', '缺少 Passkey 憑證資料');
+  }
   const uid = context.auth.uid;
-  const origin = context.rawRequest.headers.origin;
-  const rpID = new URL(origin).hostname;
+  const { origin, rpID } = resolveRpInfo(context, data);
   const userRef = db.collection('users').doc(uid);
   const userDoc = await userRef.get();
-  const expectedChallenge = userDoc.data().currentChallenge;
+  if (!userDoc.exists) {
+    throw new functions.https.HttpsError('failed-precondition', '尚未建立 Passkey 註冊挑戰，請重新操作。');
+  }
+  const userData = userDoc.data();
+  const expectedChallenge = userData.currentChallenge;
+  if (!expectedChallenge) {
+    throw new functions.https.HttpsError('failed-precondition', '缺少驗證所需的挑戰，請重新開始註冊流程。');
+  }
+
 
   let verification;
   try {
     verification = await verifyRegistrationResponse({
-      response: data,
+
+      response: data.credential,
+
       expectedChallenge,
       expectedOrigin: origin,
       expectedRPID: rpID,
@@ -74,6 +131,9 @@ exports.verifyRegistration = functions.https.onCall(async (data, context) => {
         publicKey: publicKeyBase64,
         counter,
       }),
+
+      currentChallenge: admin.firestore.FieldValue.delete(),
+
     }, { merge: true });
   }
 
@@ -82,8 +142,12 @@ exports.verifyRegistration = functions.https.onCall(async (data, context) => {
 
 exports.generateAuthenticationOptions = functions.https.onCall(async (data, context) => {
   const { email } = data;
-  const origin = context.rawRequest.headers.origin;
-  const rpID = new URL(origin).hostname;
+
+  if (!email) {
+    throw new functions.https.HttpsError('invalid-argument', '缺少 email');
+  }
+  const { origin, rpID } = resolveRpInfo(context, data);
+
   const snap = await db.collection('users').where('email', '==', email).limit(1).get();
   if (snap.empty) {
     throw new functions.https.HttpsError('not-found', '找不到使用者');
@@ -103,9 +167,13 @@ exports.generateAuthenticationOptions = functions.https.onCall(async (data, cont
 });
 
 exports.verifyAuthentication = functions.https.onCall(async (data, context) => {
-  const { email, credential } = data;
-  const origin = context.rawRequest.headers.origin;
-  const rpID = new URL(origin).hostname;
+
+  const { email, credential } = data || {};
+  if (!email || !credential) {
+    throw new functions.https.HttpsError('invalid-argument', '缺少 Passkey 登入所需的資料');
+  }
+  const { origin, rpID } = resolveRpInfo(context, data);
+
   const snap = await db.collection('users').where('email', '==', email).limit(1).get();
   if (snap.empty) {
     throw new functions.https.HttpsError('not-found', '找不到使用者');
@@ -143,6 +211,9 @@ exports.verifyAuthentication = functions.https.onCall(async (data, context) => {
           ? { ...pk, counter: authenticationInfo.newCounter }
           : pk
       ),
+
+      currentChallenge: admin.firestore.FieldValue.delete(),
+
     });
     const token = await admin.auth().createCustomToken(userDoc.id);
     return { token };
