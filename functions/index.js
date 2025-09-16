@@ -10,8 +10,16 @@ const {
 admin.initializeApp();
 const db = admin.firestore();
 
+// 您的應用程式名稱，會顯示在 Passkey 驗證提示中
 const rpName = 'Cloud Clipboard';
 
+/**
+ * 解析請求來源 (origin) 和依賴方 ID (rpID)。
+ * 優先使用前端傳來的資料，若無則嘗試從請求標頭中解析。
+ * @param {functions.https.CallableContext} context - Cloud Function 的上下文。
+ * @param {object} data - 前端傳來的資料。
+ * @returns {{origin: string, rpID: string}}
+ */
 function resolveRpInfo(context, data = {}) {
   const headers = context.rawRequest?.headers || {};
   const originFromData = data.origin;
@@ -33,6 +41,7 @@ function resolveRpInfo(context, data = {}) {
     );
   }
 
+  // rpID 通常是網站的主機名稱
   let rpID = data.rpID;
   if (!rpID) {
     try {
@@ -55,7 +64,9 @@ function resolveRpInfo(context, data = {}) {
   return { origin, rpID };
 }
 
-
+/**
+ * 產生 Passkey 註冊選項 (Challenge)
+ */
 exports.generateRegistrationOptions = functions.https.onCall(async (data, context) => {
   if (!context.auth) {
     throw new functions.https.HttpsError('unauthenticated', '需要登入才能註冊 Passkey');
@@ -68,35 +79,28 @@ exports.generateRegistrationOptions = functions.https.onCall(async (data, contex
   const userDoc = await userRef.get();
   const passkeys = userDoc.exists ? userDoc.data().passkeys || [] : [];
 
-  const userIDBuffer = Buffer.from(uid, 'utf8');
-  const options = generateRegistrationOptions({
+  const options = await generateRegistrationOptions({
     rpName,
     rpID,
-    userID: userIDBuffer,
-
+    userID: uid,
     userName: context.auth.token.email || uid,
     attestationType: 'none',
+    // 排除已註冊過的憑證
     excludeCredentials: passkeys.map(pk => ({
       id: Buffer.from(pk.credentialID, 'base64url'),
       type: 'public-key',
     })),
   });
 
-  const { challenge } = options;
-  if (!challenge) {
-    throw new functions.https.HttpsError('internal', '無法建立 Passkey 註冊挑戰');
-  }
-
-  const dataToSet = { currentChallenge: challenge };
-  if (context.auth.token.email) {
-    dataToSet.email = context.auth.token.email;
-  }
-
-  await userRef.set(dataToSet, { merge: true });
+  // 將 challenge 暫存到使用者資料中，以便後續驗證
+  await userRef.set({ currentChallenge: options.challenge }, { merge: true });
 
   return options;
 });
 
+/**
+ * 驗證 Passkey 註冊憑證
+ */
 exports.verifyRegistration = functions.https.onCall(async (data, context) => {
   if (!context.auth) {
     throw new functions.https.HttpsError('unauthenticated', '需要登入才能註冊 Passkey');
@@ -107,13 +111,11 @@ exports.verifyRegistration = functions.https.onCall(async (data, context) => {
   }
   const uid = context.auth.uid;
   const { origin, rpID } = resolveRpInfo(context, data);
+
   const userRef = db.collection('users').doc(uid);
   const userDoc = await userRef.get();
-  if (!userDoc.exists) {
-    throw new functions.https.HttpsError('failed-precondition', '尚未建立 Passkey 註冊挑戰，請重新操作。');
-  }
-  const userData = userDoc.data();
-  const expectedChallenge = userData.currentChallenge;
+  const expectedChallenge = userDoc.exists ? userDoc.data().currentChallenge : undefined;
+
   if (!expectedChallenge) {
     throw new functions.https.HttpsError('failed-precondition', '缺少驗證所需的挑戰，請重新開始註冊流程。');
   }
@@ -122,81 +124,88 @@ exports.verifyRegistration = functions.https.onCall(async (data, context) => {
   try {
     verification = await verifyRegistrationResponse({
       response: data.credential,
-
       expectedChallenge,
       expectedOrigin: origin,
       expectedRPID: rpID,
     });
   } catch (error) {
-    throw new functions.https.HttpsError('invalid-argument', error.message);
+    console.error('Passkey Registration Verification Error:', error);
+    throw new functions.https.HttpsError('invalid-argument', `憑證驗證失敗: ${error.message}`);
   }
 
   const { verified, registrationInfo } = verification;
   if (verified && registrationInfo) {
     const { credentialPublicKey, credentialID, counter } = registrationInfo;
-    const credentialIDBase64 = credentialID.toString('base64url');
-    const publicKeyBase64 = credentialPublicKey.toString('base64url');
+    
+    // 將二進位資料轉為 base64url 字串以便存入 Firestore
+    const newPasskey = {
+      credentialID: Buffer.from(credentialID).toString('base64url'),
+      publicKey: Buffer.from(credentialPublicKey).toString('base64url'),
+      counter,
+    };
 
     await userRef.set({
-      passkeys: admin.firestore.FieldValue.arrayUnion({
-        credentialID: credentialIDBase64,
-        publicKey: publicKeyBase64,
-        counter,
-      }),
-
-      currentChallenge: admin.firestore.FieldValue.delete(),
-
+      passkeys: admin.firestore.FieldValue.arrayUnion(newPasskey),
+      currentChallenge: admin.firestore.FieldValue.delete(), // 驗證完畢後刪除 challenge
     }, { merge: true });
   }
 
   return { verified };
 });
 
+/**
+ * 產生 Passkey 登入選項 (Challenge)
+ */
 exports.generateAuthenticationOptions = functions.https.onCall(async (data, context) => {
   const { email } = data;
-
   if (!email) {
     throw new functions.https.HttpsError('invalid-argument', '缺少 email');
   }
+
   const { origin, rpID } = resolveRpInfo(context, data);
 
   const snap = await db.collection('users').where('email', '==', email).limit(1).get();
   if (snap.empty) {
-    throw new functions.https.HttpsError('not-found', '找不到使用者');
+    throw new functions.https.HttpsError('not-found', '找不到與此電子郵件相關的 Passkey。');
   }
+
   const userDoc = snap.docs[0];
   const user = userDoc.data();
-  const options = generateAuthenticationOptions({
+
+  if (!user.passkeys || user.passkeys.length === 0) {
+    throw new functions.https.HttpsError('not-found', '此帳號尚未註冊任何 Passkey。');
+  }
+
+  const options = await generateAuthenticationOptions({
     rpID,
-    allowCredentials: (user.passkeys || []).map(pk => ({
+    allowCredentials: user.passkeys.map(pk => ({
       id: Buffer.from(pk.credentialID, 'base64url'),
       type: 'public-key',
     })),
-    userVerification: 'preferred',
+    userVerification: 'required', // 提高安全性，要求使用者進行生物辨識或 PIN 碼驗證
   });
 
-  const { challenge } = options;
-  if (!challenge) {
-    throw new functions.https.HttpsError('internal', '無法建立 Passkey 登入挑戰');
-  }
-
-  await userDoc.ref.update({ currentChallenge: challenge });
+  await userDoc.ref.update({ currentChallenge: options.challenge });
 
   return { options };
 });
 
+/**
+ * 驗證 Passkey 登入憑證
+ */
 exports.verifyAuthentication = functions.https.onCall(async (data, context) => {
-
   const { email, credential } = data || {};
   if (!email || !credential) {
     throw new functions.https.HttpsError('invalid-argument', '缺少 Passkey 登入所需的資料');
   }
+
   const { origin, rpID } = resolveRpInfo(context, data);
 
   const snap = await db.collection('users').where('email', '==', email).limit(1).get();
   if (snap.empty) {
     throw new functions.https.HttpsError('not-found', '找不到使用者');
   }
+
   const userDoc = snap.docs[0];
   const user = userDoc.data();
   const expectedChallenge = user.currentChallenge;
@@ -205,9 +214,9 @@ exports.verifyAuthentication = functions.https.onCall(async (data, context) => {
     throw new functions.https.HttpsError('failed-precondition', 'Passkey 登入挑戰已過期，請重新操作。');
   }
 
-  const passkey = (user.passkeys || []).find(pk => pk.credentialID === credential.rawId);
+  const passkey = (user.passkeys || []).find(pk => pk.credentialID === credential.id);
   if (!passkey) {
-    throw new functions.https.HttpsError('not-found', 'Passkey 未註冊');
+    throw new functions.https.HttpsError('not-found', '此裝置的 Passkey 未註冊');
   }
 
   let verification;
@@ -222,25 +231,29 @@ exports.verifyAuthentication = functions.https.onCall(async (data, context) => {
         credentialID: Buffer.from(passkey.credentialID, 'base64url'),
         counter: passkey.counter,
       },
+      requireUserVerification: true,
     });
   } catch (error) {
-    throw new functions.https.HttpsError('invalid-argument', error.message);
+    console.error('Passkey Authentication Verification Error:', error);
+    throw new functions.https.HttpsError('unauthenticated', `驗證失敗: ${error.message}`);
   }
 
   const { verified, authenticationInfo } = verification;
   if (verified) {
+    // 更新 counter
     await userDoc.ref.update({
-      passkeys: (user.passkeys || []).map(pk =>
+      passkeys: user.passkeys.map(pk =>
         pk.credentialID === passkey.credentialID
           ? { ...pk, counter: authenticationInfo.newCounter }
           : pk
       ),
-
       currentChallenge: admin.firestore.FieldValue.delete(),
-
     });
+
+    // 產生 Firebase custom token 讓前端登入
     const token = await admin.auth().createCustomToken(userDoc.id);
     return { token };
   }
-  throw new functions.https.HttpsError('unauthenticated', '驗證失敗');
+
+  throw new functions.https.HttpsError('unauthenticated', 'Passkey 驗證失敗');
 });
