@@ -55,12 +55,15 @@ function resolveRpInfo(context, data = {}) {
   return { origin, rpID };
 }
 
+
 exports.generateRegistrationOptions = functions.https.onCall(async (data, context) => {
   if (!context.auth) {
     throw new functions.https.HttpsError('unauthenticated', '需要登入才能註冊 Passkey');
   }
   const uid = context.auth.uid;
+
   const { origin, rpID } = resolveRpInfo(context, data);
+
   const userRef = db.collection('users').doc(uid);
   const userDoc = await userRef.get();
   const passkeys = userDoc.exists ? userDoc.data().passkeys || [] : [];
@@ -70,6 +73,7 @@ exports.generateRegistrationOptions = functions.https.onCall(async (data, contex
     rpName,
     rpID,
     userID: userIDBuffer,
+
     userName: context.auth.token.email || uid,
     attestationType: 'none',
     excludeCredentials: passkeys.map(pk => ({
@@ -89,6 +93,7 @@ exports.generateRegistrationOptions = functions.https.onCall(async (data, contex
   }
 
   await userRef.set(dataToSet, { merge: true });
+
   return options;
 });
 
@@ -96,6 +101,7 @@ exports.verifyRegistration = functions.https.onCall(async (data, context) => {
   if (!context.auth) {
     throw new functions.https.HttpsError('unauthenticated', '需要登入才能註冊 Passkey');
   }
+
   if (!data || !data.credential) {
     throw new functions.https.HttpsError('invalid-argument', '缺少 Passkey 憑證資料');
   }
@@ -116,6 +122,7 @@ exports.verifyRegistration = functions.https.onCall(async (data, context) => {
   try {
     verification = await verifyRegistrationResponse({
       response: data.credential,
+
       expectedChallenge,
       expectedOrigin: origin,
       expectedRPID: rpID,
@@ -136,7 +143,9 @@ exports.verifyRegistration = functions.https.onCall(async (data, context) => {
         publicKey: publicKeyBase64,
         counter,
       }),
+
       currentChallenge: admin.firestore.FieldValue.delete(),
+
     }, { merge: true });
   }
 
@@ -145,10 +154,12 @@ exports.verifyRegistration = functions.https.onCall(async (data, context) => {
 
 exports.generateAuthenticationOptions = functions.https.onCall(async (data, context) => {
   const { email } = data;
+
   if (!email) {
     throw new functions.https.HttpsError('invalid-argument', '缺少 email');
   }
   const { origin, rpID } = resolveRpInfo(context, data);
+
   const snap = await db.collection('users').where('email', '==', email).limit(1).get();
   if (snap.empty) {
     throw new functions.https.HttpsError('not-found', '找不到使用者');
@@ -163,21 +174,25 @@ exports.generateAuthenticationOptions = functions.https.onCall(async (data, cont
     })),
     userVerification: 'preferred',
   });
+
   const { challenge } = options;
   if (!challenge) {
     throw new functions.https.HttpsError('internal', '無法建立 Passkey 登入挑戰');
   }
 
   await userDoc.ref.update({ currentChallenge: challenge });
+
   return { options };
 });
 
 exports.verifyAuthentication = functions.https.onCall(async (data, context) => {
+
   const { email, credential } = data || {};
   if (!email || !credential) {
     throw new functions.https.HttpsError('invalid-argument', '缺少 Passkey 登入所需的資料');
   }
   const { origin, rpID } = resolveRpInfo(context, data);
+
   const snap = await db.collection('users').where('email', '==', email).limit(1).get();
   if (snap.empty) {
     throw new functions.https.HttpsError('not-found', '找不到使用者');
@@ -185,9 +200,11 @@ exports.verifyAuthentication = functions.https.onCall(async (data, context) => {
   const userDoc = snap.docs[0];
   const user = userDoc.data();
   const expectedChallenge = user.currentChallenge;
+
   if (!expectedChallenge) {
     throw new functions.https.HttpsError('failed-precondition', 'Passkey 登入挑戰已過期，請重新操作。');
   }
+
   const passkey = (user.passkeys || []).find(pk => pk.credentialID === credential.rawId);
   if (!passkey) {
     throw new functions.https.HttpsError('not-found', 'Passkey 未註冊');
@@ -218,7 +235,9 @@ exports.verifyAuthentication = functions.https.onCall(async (data, context) => {
           ? { ...pk, counter: authenticationInfo.newCounter }
           : pk
       ),
+
       currentChallenge: admin.firestore.FieldValue.delete(),
+
     });
     const token = await admin.auth().createCustomToken(userDoc.id);
     return { token };

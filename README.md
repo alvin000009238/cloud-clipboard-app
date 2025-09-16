@@ -37,7 +37,7 @@ GitHub Actions - 自動化打包專案並部署到 Firebase Hosting。
 
 ```sh
 # 複製儲存庫
-git clone [https://github.com/alvin000009238/cloud-clipboard-app.git]
+git clone https://github.com/alvin000009238/cloud-clipboard-app.git
 ```
 ```sh
 # 進入專案資料夾
@@ -86,7 +86,9 @@ service firebase.storage {
 ```sh
 npm run dev
 ```
+
 應用程式將會在 `http://localhost:5173` 上執行。
+
 
 ## 🔐 設定 Passkey 與 Cloud Functions
 ### 1. 安裝前端套件
