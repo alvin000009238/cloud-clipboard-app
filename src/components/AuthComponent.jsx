@@ -38,7 +38,9 @@ const AuthComponent = ({ auth }) => {
       const token = await loginWithPasskey(email);
       await signInWithCustomToken(auth, token);
     } catch (err) {
-      setError('Passkey 登入失敗，請再試一次。');
+
+      setError(err?.message || 'Passkey 登入失敗，請再試一次。');
+
     } finally {
       setLoading(false);
     }

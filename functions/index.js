@@ -1,5 +1,8 @@
 const functions = require('firebase-functions');
 const admin = require('firebase-admin');
+
+const cors = require('cors');
+
 const {
   generateRegistrationOptions,
   verifyRegistrationResponse,
@@ -10,250 +13,376 @@ const {
 admin.initializeApp();
 const db = admin.firestore();
 
-// 您的應用程式名稱，會顯示在 Passkey 驗證提示中
+
+const REGION = 'us-central1';
 const rpName = 'Cloud Clipboard';
+const PROD_RP_ID = 'cloud.20090408.xyz';
+const LOCAL_RP_ID = 'localhost';
+const ALLOWED_ORIGINS = [
+  'https://cloud.20090408.xyz',
+  'http://localhost:5173',
+];
 
-/**
- * 解析請求來源 (origin) 和依賴方 ID (rpID)。
- * 優先使用前端傳來的資料，若無則嘗試從請求標頭中解析。
- * @param {functions.https.CallableContext} context - Cloud Function 的上下文。
- * @param {object} data - 前端傳來的資料。
- * @returns {{origin: string, rpID: string}}
- */
-function resolveRpInfo(context, data = {}) {
-  const headers = context.rawRequest?.headers || {};
-  const originFromData = data.origin;
-  const originFromHeader = headers.origin;
-  const forwardedHost = headers['x-forwarded-host'];
-  const host = forwardedHost || headers.host;
+const EXPECTED_ORIGINS = [...ALLOWED_ORIGINS];
 
-  let origin = originFromData || originFromHeader;
-  if (!origin && host) {
-    const isLocal = /localhost|127\.0\.0\.1|\[::1\]/.test(host);
-    const protocol = isLocal ? 'http' : 'https';
-    origin = `${protocol}://${host}`;
+const corsMiddleware = cors({
+  origin: ALLOWED_ORIGINS,
+  credentials: true,
+});
+
+class HttpError extends Error {
+  constructor(status, code, message) {
+    super(message);
+    this.status = status;
+    this.code = code;
   }
-
-  if (!origin) {
-    throw new functions.https.HttpsError(
-      'invalid-argument',
-      '無法判斷請求來源的 origin，請在請求資料中提供 origin。',
-    );
-  }
-
-  // rpID 通常是網站的主機名稱
-  let rpID = data.rpID;
-  if (!rpID) {
-    try {
-      rpID = new URL(origin).hostname;
-    } catch (error) {
-      throw new functions.https.HttpsError(
-        'invalid-argument',
-        '提供的 origin 不是有效的 URL，請確認 origin 或直接提供 rpID。',
-      );
-    }
-  }
-
-  if (!rpID) {
-    throw new functions.https.HttpsError(
-      'invalid-argument',
-      '無法判斷 RP ID，請提供 rpID。',
-    );
-  }
-
-  return { origin, rpID };
 }
 
-/**
- * 產生 Passkey 註冊選項 (Challenge)
- */
-exports.generateRegistrationOptions = functions.https.onCall(async (data, context) => {
-  if (!context.auth) {
-    throw new functions.https.HttpsError('unauthenticated', '需要登入才能註冊 Passkey');
+function toB64u(value) {
+  if (!value) {
+    return '';
   }
-  const uid = context.auth.uid;
-
-  const { origin, rpID } = resolveRpInfo(context, data);
-
-  const userRef = db.collection('users').doc(uid);
-  const userDoc = await userRef.get();
-  const passkeys = userDoc.exists ? userDoc.data().passkeys || [] : [];
-
-  const options = await generateRegistrationOptions({
-    rpName,
-    rpID,
-    userID: uid,
-    userName: context.auth.token.email || uid,
-    attestationType: 'none',
-    // 排除已註冊過的憑證
-    excludeCredentials: passkeys.map(pk => ({
-      id: Buffer.from(pk.credentialID, 'base64url'),
-      type: 'public-key',
-    })),
-  });
-
-  // 將 challenge 暫存到使用者資料中，以便後續驗證
-  await userRef.set({ currentChallenge: options.challenge }, { merge: true });
-
-  return options;
-});
-
-/**
- * 驗證 Passkey 註冊憑證
- */
-exports.verifyRegistration = functions.https.onCall(async (data, context) => {
-  if (!context.auth) {
-    throw new functions.https.HttpsError('unauthenticated', '需要登入才能註冊 Passkey');
+  if (Buffer.isBuffer(value)) {
+    return value.toString('base64url');
   }
-
-  if (!data || !data.credential) {
-    throw new functions.https.HttpsError('invalid-argument', '缺少 Passkey 憑證資料');
+  if (value instanceof ArrayBuffer) {
+    return Buffer.from(new Uint8Array(value)).toString('base64url');
   }
-  const uid = context.auth.uid;
-  const { origin, rpID } = resolveRpInfo(context, data);
-
-  const userRef = db.collection('users').doc(uid);
-  const userDoc = await userRef.get();
-  const expectedChallenge = userDoc.exists ? userDoc.data().currentChallenge : undefined;
-
-  if (!expectedChallenge) {
-    throw new functions.https.HttpsError('failed-precondition', '缺少驗證所需的挑戰，請重新開始註冊流程。');
+  if (value instanceof Uint8Array) {
+    return Buffer.from(value).toString('base64url');
   }
+  return Buffer.from(value).toString('base64url');
+}
 
-  let verification;
+function fromB64u(value) {
+  return Buffer.from(value, 'base64url');
+}
+
+function getRequestOrigin(req) {
+  return req.get('origin') || '';
+}
+
+function determineRpID(origin) {
+  if (origin === 'http://localhost:5173') {
+    return LOCAL_RP_ID;
+  }
+  return PROD_RP_ID;
+}
+
+function ensureOriginAllowed(origin) {
+  if (!origin) {
+    throw new HttpError(400, 'originMissing', '缺少請求來源 (origin)。');
+  }
+  if (!EXPECTED_ORIGINS.includes(origin) && !origin.startsWith('android:')) {
+    throw new HttpError(403, 'originNotAllowed', '來源不被允許。');
+  }
+}
+
+function sendError(res, status, code, message) {
+  res.status(status).json({ ok: false, code, message });
+}
+
+function mapVerificationError(error) {
+  const message = error?.message || '';
+  if (message.toLowerCase().includes('origin mismatch')) {
+    return 'expectedOriginMismatch';
+  }
+  if (message.toLowerCase().includes('rp id mismatch') || message.toLowerCase().includes('rp id did not')) {
+    return 'expectedRPIDMismatch';
+  }
+  if (message.toLowerCase().includes('challenge mismatch')) {
+    return 'challengeMismatch';
+  }
+  if (message.toLowerCase().includes('user verification failed')) {
+    return 'userVerificationFailed';
+  }
+  return 'verificationFailed';
+}
+
+async function requireAuth(req) {
+  const header = req.get('authorization') || '';
+  const match = header.match(/^Bearer\s+(.+)$/i);
+  if (!match) {
+    throw new HttpError(401, 'unauthenticated', '需要登入才能執行此操作。');
+  }
   try {
-    verification = await verifyRegistrationResponse({
-      response: data.credential,
-      expectedChallenge,
-      expectedOrigin: origin,
-      expectedRPID: rpID,
-    });
+    return await admin.auth().verifyIdToken(match[1]);
   } catch (error) {
-    console.error('Passkey Registration Verification Error:', error);
-    throw new functions.https.HttpsError('invalid-argument', `憑證驗證失敗: ${error.message}`);
+    throw new HttpError(401, 'unauthenticated', '登入資訊已失效，請重新登入。');
   }
+}
 
-  const { verified, registrationInfo } = verification;
-  if (verified && registrationInfo) {
+function withCors(handler) {
+  return (req, res) => {
+    corsMiddleware(req, res, async () => {
+      if (req.method === 'OPTIONS') {
+        res.status(204).send('');
+        return;
+      }
+      try {
+        await handler(req, res);
+      } catch (error) {
+        if (error instanceof HttpError) {
+          sendError(res, error.status, error.code, error.message);
+        } else {
+          functions.logger.error('Unhandled error', error);
+          sendError(res, 500, 'internal', '內部伺服器錯誤。');
+        }
+      }
+    });
+  };
+}
+
+async function getUserDocByEmail(email) {
+  const snap = await db.collection('users').where('email', '==', email).limit(1).get();
+  if (snap.empty) {
+    return null;
+  }
+  return snap.docs[0];
+}
+
+async function getChallengeDoc(userRef) {
+  return userRef.collection('webauthn').doc('challenge').get();
+}
+
+function getCredentialCollection(userRef) {
+  return userRef.collection('credentials');
+}
+
+exports.regOptions = functions
+  .region(REGION)
+  .https.onRequest(withCors(async (req, res) => {
+    if (req.method !== 'GET') {
+      throw new HttpError(405, 'methodNotAllowed', '僅支援 GET 請求。');
+    }
+
+    const decoded = await requireAuth(req);
+    const origin = getRequestOrigin(req);
+    ensureOriginAllowed(origin);
+    const rpID = determineRpID(origin);
+    functions.logger.info('regOptions', { uid: decoded.uid, origin, rpID });
+
+    const userRef = db.collection('users').doc(decoded.uid);
+    const userData = {};
+    if (decoded.email) {
+      userData.email = decoded.email.toLowerCase();
+    }
+    if (Object.keys(userData).length > 0) {
+      await userRef.set(userData, { merge: true });
+    }
+
+    const credentialsSnap = await getCredentialCollection(userRef).get();
+    const excludeCredentials = credentialsSnap.docs.map(doc => ({
+      id: fromB64u(doc.id),
+      type: 'public-key',
+    }));
+
+    const options = generateRegistrationOptions({
+      rpName,
+      rpID,
+      userID: Buffer.from(decoded.uid, 'utf8'),
+      userName: decoded.email || decoded.uid,
+      attestationType: 'none',
+      excludeCredentials,
+    });
+
+    await userRef.collection('webauthn').doc('challenge').set({
+      value: options.challenge,
+      type: 'registration',
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    res.json({ ok: true, options });
+  }));
+
+exports.regVerify = functions
+  .region(REGION)
+  .https.onRequest(withCors(async (req, res) => {
+    if (req.method !== 'POST') {
+      throw new HttpError(405, 'methodNotAllowed', '僅支援 POST 請求。');
+    }
+
+    const decoded = await requireAuth(req);
+    const origin = getRequestOrigin(req);
+    ensureOriginAllowed(origin);
+    const rpID = determineRpID(origin);
+
+    const credential = req.body?.credential;
+    if (!credential) {
+      throw new HttpError(400, 'invalidRequest', '缺少 Passkey 憑證資料。');
+    }
+
+    const userRef = db.collection('users').doc(decoded.uid);
+    const challengeSnap = await getChallengeDoc(userRef);
+    if (!challengeSnap.exists) {
+      throw new HttpError(400, 'challengeMissing', '找不到註冊挑戰，請重新開始流程。');
+    }
+
+    const { value: expectedChallenge, type } = challengeSnap.data();
+    if (type !== 'registration' || !expectedChallenge) {
+      throw new HttpError(400, 'challengeMismatch', '註冊挑戰無效，請重新開始流程。');
+    }
+
+    functions.logger.info('regVerify', { uid: decoded.uid, origin, rpID });
+
+    let verification;
+    try {
+      verification = await verifyRegistrationResponse({
+        response: credential,
+        expectedChallenge,
+        expectedOrigin: EXPECTED_ORIGINS,
+        expectedRPID: rpID,
+      });
+    } catch (error) {
+      const code = mapVerificationError(error);
+      throw new HttpError(400, code, error.message);
+    }
+
+    const { verified, registrationInfo } = verification;
+    if (!verified || !registrationInfo) {
+      throw new HttpError(400, 'userVerificationFailed', 'Passkey 註冊驗證失敗。');
+    }
+
     const { credentialPublicKey, credentialID, counter } = registrationInfo;
-    
-    // 將二進位資料轉為 base64url 字串以便存入 Firestore
-    const newPasskey = {
-      credentialID: Buffer.from(credentialID).toString('base64url'),
-      publicKey: Buffer.from(credentialPublicKey).toString('base64url'),
+    const credentialIDB64 = toB64u(credentialID);
+    const publicKeyB64 = toB64u(credentialPublicKey);
+    const transports = Array.isArray(credential.transports) ? credential.transports : [];
+
+    await getCredentialCollection(userRef).doc(credentialIDB64).set({
+      credentialID: credentialIDB64,
+      publicKey: publicKeyB64,
       counter,
-    };
-
-    await userRef.set({
-      passkeys: admin.firestore.FieldValue.arrayUnion(newPasskey),
-      currentChallenge: admin.firestore.FieldValue.delete(), // 驗證完畢後刪除 challenge
-    }, { merge: true });
-  }
-
-  return { verified };
-});
-
-/**
- * 產生 Passkey 登入選項 (Challenge)
- */
-exports.generateAuthenticationOptions = functions.https.onCall(async (data, context) => {
-  const { email } = data;
-  if (!email) {
-    throw new functions.https.HttpsError('invalid-argument', '缺少 email');
-  }
-
-  const { origin, rpID } = resolveRpInfo(context, data);
-
-  const snap = await db.collection('users').where('email', '==', email).limit(1).get();
-  if (snap.empty) {
-    throw new functions.https.HttpsError('not-found', '找不到與此電子郵件相關的 Passkey。');
-  }
-
-  const userDoc = snap.docs[0];
-  const user = userDoc.data();
-
-  if (!user.passkeys || user.passkeys.length === 0) {
-    throw new functions.https.HttpsError('not-found', '此帳號尚未註冊任何 Passkey。');
-  }
-
-  const options = await generateAuthenticationOptions({
-    rpID,
-    allowCredentials: user.passkeys.map(pk => ({
-      id: Buffer.from(pk.credentialID, 'base64url'),
-      type: 'public-key',
-    })),
-    userVerification: 'required', // 提高安全性，要求使用者進行生物辨識或 PIN 碼驗證
-  });
-
-  await userDoc.ref.update({ currentChallenge: options.challenge });
-
-  return { options };
-});
-
-/**
- * 驗證 Passkey 登入憑證
- */
-exports.verifyAuthentication = functions.https.onCall(async (data, context) => {
-  const { email, credential } = data || {};
-  if (!email || !credential) {
-    throw new functions.https.HttpsError('invalid-argument', '缺少 Passkey 登入所需的資料');
-  }
-
-  const { origin, rpID } = resolveRpInfo(context, data);
-
-  const snap = await db.collection('users').where('email', '==', email).limit(1).get();
-  if (snap.empty) {
-    throw new functions.https.HttpsError('not-found', '找不到使用者');
-  }
-
-  const userDoc = snap.docs[0];
-  const user = userDoc.data();
-  const expectedChallenge = user.currentChallenge;
-
-  if (!expectedChallenge) {
-    throw new functions.https.HttpsError('failed-precondition', 'Passkey 登入挑戰已過期，請重新操作。');
-  }
-
-  const passkey = (user.passkeys || []).find(pk => pk.credentialID === credential.id);
-  if (!passkey) {
-    throw new functions.https.HttpsError('not-found', '此裝置的 Passkey 未註冊');
-  }
-
-  let verification;
-  try {
-    verification = await verifyAuthenticationResponse({
-      response: credential,
-      expectedChallenge,
-      expectedOrigin: origin,
-      expectedRPID: rpID,
-      authenticator: {
-        credentialPublicKey: Buffer.from(passkey.publicKey, 'base64url'),
-        credentialID: Buffer.from(passkey.credentialID, 'base64url'),
-        counter: passkey.counter,
-      },
-      requireUserVerification: true,
-    });
-  } catch (error) {
-    console.error('Passkey Authentication Verification Error:', error);
-    throw new functions.https.HttpsError('unauthenticated', `驗證失敗: ${error.message}`);
-  }
-
-  const { verified, authenticationInfo } = verification;
-  if (verified) {
-    // 更新 counter
-    await userDoc.ref.update({
-      passkeys: user.passkeys.map(pk =>
-        pk.credentialID === passkey.credentialID
-          ? { ...pk, counter: authenticationInfo.newCounter }
-          : pk
-      ),
-      currentChallenge: admin.firestore.FieldValue.delete(),
+      transports,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
     });
 
-    // 產生 Firebase custom token 讓前端登入
-    const token = await admin.auth().createCustomToken(userDoc.id);
-    return { token };
-  }
+    await userRef.collection('webauthn').doc('challenge').delete();
 
-  throw new functions.https.HttpsError('unauthenticated', 'Passkey 驗證失敗');
-});
+    res.json({ ok: true });
+  }));
+
+exports.authOptions = functions
+  .region(REGION)
+  .https.onRequest(withCors(async (req, res) => {
+    if (req.method !== 'GET') {
+      throw new HttpError(405, 'methodNotAllowed', '僅支援 GET 請求。');
+    }
+
+    const email = (req.query?.email || '').toString().trim().toLowerCase();
+    if (!email) {
+      throw new HttpError(400, 'missingEmail', '請提供 email。');
+    }
+
+    const origin = getRequestOrigin(req);
+    ensureOriginAllowed(origin);
+    const rpID = determineRpID(origin);
+    functions.logger.info('authOptions', { email, origin, rpID });
+
+    const userDoc = await getUserDocByEmail(email);
+    if (!userDoc) {
+      throw new HttpError(404, 'userNotFound', '找不到對應的使用者。');
+    }
+
+    const credentialsSnap = await getCredentialCollection(userDoc.ref).get();
+    if (credentialsSnap.empty) {
+      throw new HttpError(404, 'credentialNotFound', '此使用者尚未註冊 Passkey。');
+    }
+
+    const allowCredentials = credentialsSnap.docs.map(doc => {
+      const data = doc.data();
+      return {
+        id: fromB64u(doc.id),
+        type: 'public-key',
+        transports: data.transports && data.transports.length ? data.transports : undefined,
+      };
+    });
+
+    const options = generateAuthenticationOptions({
+      rpID,
+      allowCredentials,
+      userVerification: 'preferred',
+    });
+
+    await userDoc.ref.collection('webauthn').doc('challenge').set({
+      value: options.challenge,
+      type: 'authentication',
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    res.json({ ok: true, options });
+  }));
+
+exports.authVerify = functions
+  .region(REGION)
+  .https.onRequest(withCors(async (req, res) => {
+    if (req.method !== 'POST') {
+      throw new HttpError(405, 'methodNotAllowed', '僅支援 POST 請求。');
+    }
+
+    const { email, credential } = req.body || {};
+    if (!email || !credential) {
+      throw new HttpError(400, 'invalidRequest', '缺少 Passkey 登入所需的資料。');
+    }
+
+    const origin = getRequestOrigin(req);
+    ensureOriginAllowed(origin);
+    const rpID = determineRpID(origin);
+    functions.logger.info('authVerify', { email, origin, rpID });
+
+    const userDoc = await getUserDocByEmail(email.toLowerCase());
+    if (!userDoc) {
+      throw new HttpError(404, 'userNotFound', '找不到對應的使用者。');
+    }
+
+    const challengeSnap = await getChallengeDoc(userDoc.ref);
+    if (!challengeSnap.exists) {
+      throw new HttpError(400, 'challengeMissing', 'Passkey 登入挑戰已過期，請重新操作。');
+    }
+
+    const { value: expectedChallenge, type } = challengeSnap.data();
+    if (type !== 'authentication' || !expectedChallenge) {
+      throw new HttpError(400, 'challengeMismatch', 'Passkey 登入挑戰無效，請重新操作。');
+    }
+
+    const credentialId = credential.rawId;
+    const storedCredentialDoc = await getCredentialCollection(userDoc.ref).doc(credentialId).get();
+    if (!storedCredentialDoc.exists) {
+      throw new HttpError(404, 'credentialNotFound', 'Passkey 未註冊或已被移除。');
+    }
+
+    const storedCredential = storedCredentialDoc.data();
+
+    let verification;
+    try {
+      verification = await verifyAuthenticationResponse({
+        response: credential,
+        expectedChallenge,
+        expectedOrigin: EXPECTED_ORIGINS,
+        expectedRPID: rpID,
+        authenticator: {
+          credentialPublicKey: fromB64u(storedCredential.publicKey),
+          credentialID: fromB64u(credentialId),
+          counter: storedCredential.counter || 0,
+          transports: storedCredential.transports || [],
+        },
+      });
+    } catch (error) {
+      const code = mapVerificationError(error);
+      throw new HttpError(401, code, error.message);
+    }
+
+    const { verified, authenticationInfo } = verification;
+    if (!verified || !authenticationInfo) {
+      throw new HttpError(401, 'userVerificationFailed', 'Passkey 登入驗證失敗。');
+    }
+
+    await storedCredentialDoc.ref.update({
+      counter: authenticationInfo.newCounter,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    await userDoc.ref.collection('webauthn').doc('challenge').delete();
+
+    const customToken = await admin.auth().createCustomToken(userDoc.id);
+    res.json({ ok: true, customToken });
+  }));
