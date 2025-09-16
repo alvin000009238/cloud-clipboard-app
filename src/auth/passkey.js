@@ -1,3 +1,4 @@
+
 import { getAuth } from 'firebase/auth';
 import { startRegistration, startAuthentication } from '@simplewebauthn/browser';
 
@@ -79,6 +80,7 @@ export async function registerPasskey() {
   });
 
   return true;
+
 }
 
 /**
@@ -86,6 +88,7 @@ export async function registerPasskey() {
  * @param {string} email - Email used to look up user credentials
  */
 export async function loginWithPasskey(email) {
+
   const normalizedEmail = (email || '').trim().toLowerCase();
   if (!normalizedEmail) {
     throw new Error('請輸入電子郵件後再使用 Passkey 登入。');
@@ -113,4 +116,5 @@ export async function loginWithPasskey(email) {
   }
 
   return customToken;
+
 }

@@ -27,7 +27,9 @@ const UserSettings = ({ user, onClose, onLogout }) => {
       await registerPasskey();
       setMessage('Passkey 已成功新增。');
     } catch (e) {
+
       setError(e?.message || '新增 Passkey 失敗。');
+
     }
   };
 

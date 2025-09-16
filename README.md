@@ -37,7 +37,7 @@ GitHub Actions - 自動化打包專案並部署到 Firebase Hosting。
 
 ```sh
 # 複製儲存庫
-git clone [https://github.com/alvin000009238/cloud-clipboard-app.git]
+git clone https://github.com/alvin000009238/cloud-clipboard-app.git
 ```
 ```sh
 # 進入專案資料夾
@@ -86,13 +86,16 @@ service firebase.storage {
 ```sh
 npm run dev
 ```
+
 應用程式將會在 `http://localhost:5173` 上執行。
+
 
 ## 🔐 設定 Passkey 與 Cloud Functions
 ### 1. 安裝前端套件
 ```sh
 npm install @simplewebauthn/browser
 ```
+
 
 ### 2. 設定 Functions 與 Firebase
 專案已提供完成的 Cloud Functions 實作（`functions/index.js`），包含：
@@ -128,4 +131,5 @@ VITE_FIREBASE_FUNCTIONS_REGION="us-central1"
 3. 若遇錯誤，可查看 Cloud Functions Logs 以確認 `origin`、`rpID` 與 `challenge` 狀態。
 
 更多細節請參考 [SimpleWebAuthn 文件](https://simplewebauthn.dev/)。
+
 

@@ -1,6 +1,8 @@
 const functions = require('firebase-functions');
 const admin = require('firebase-admin');
+
 const cors = require('cors');
+
 const {
   generateRegistrationOptions,
   verifyRegistrationResponse,
@@ -10,6 +12,7 @@ const {
 
 admin.initializeApp();
 const db = admin.firestore();
+
 
 const REGION = 'us-central1';
 const rpName = 'Cloud Clipboard';
