@@ -37,7 +37,7 @@ GitHub Actions - 自動化打包專案並部署到 Firebase Hosting。
 
 ```sh
 # 複製儲存庫
-git clone [https://github.com/alvin000009238/cloud-clipboard-app.git]
+git clone https://github.com/alvin000009238/cloud-clipboard-app.git
 ```
 ```sh
 # 進入專案資料夾
