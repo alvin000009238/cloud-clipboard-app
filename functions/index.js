@@ -324,6 +324,10 @@ exports.authVerify = functions
       throw new HttpError(400, 'invalidRequest', '缺少 Passkey 登入所需的資料。');
     }
 
+    if (typeof credential.id !== 'string' || !credential.id) {
+      throw new HttpError(400, 'invalidCredentialId', '傳入的憑證 ID 無效。');
+    }
+
     const origin = getRequestOrigin(req);
     ensureOriginAllowed(origin);
     const rpID = determineRpID(origin);
