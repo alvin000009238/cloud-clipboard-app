@@ -344,7 +344,7 @@ exports.authVerify = functions
       throw new HttpError(400, 'challengeMismatch', 'Passkey 登入挑戰無效，請重新操作。');
     }
 
-    const credentialId = credential.rawId;
+    const credentialId = credential.id;
     const storedCredentialDoc = await getCredentialCollection(userDoc.ref).doc(credentialId).get();
     if (!storedCredentialDoc.exists) {
       throw new HttpError(404, 'credentialNotFound', 'Passkey 未註冊或已被移除。');
@@ -361,7 +361,7 @@ exports.authVerify = functions
         expectedRPID: rpID,
         authenticator: {
           credentialPublicKey: fromB64u(storedCredential.publicKey),
-          credentialID: fromB64u(credentialId),
+          credentialID: fromB64u(storedCredentialDoc.id),
           counter: storedCredential.counter || 0,
           transports: storedCredential.transports || [],
         },
