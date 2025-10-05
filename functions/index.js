@@ -195,7 +195,7 @@ exports.regOptions = functions
     const options = generateRegistrationOptions({
       rpName,
       rpID,
-      userID: Buffer.from(decoded.uid, 'utf8'),
+      userID: decoded.uid,
       userName: decoded.email || decoded.uid,
       attestationType: 'none',
       excludeCredentials,
