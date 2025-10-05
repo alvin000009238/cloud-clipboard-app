@@ -172,10 +172,25 @@ exports.regOptions = functions
     }
 
     const credentialsSnap = await getCredentialCollection(userRef).get();
-    const excludeCredentials = credentialsSnap.docs.map(doc => ({
-      id: fromB64u(doc.id),
-      type: 'public-key',
-    }));
+    const excludeCredentials = credentialsSnap.docs.reduce((acc, doc) => {
+      try {
+        // A malformed doc.id can crash the fromB64u function.
+        // We'll wrap this in a try/catch to gracefully skip corrupted data.
+        if (typeof doc.id === 'string' && doc.id) {
+          acc.push({
+            id: fromB64u(doc.id),
+            type: 'public-key',
+          });
+        }
+      } catch (error) {
+        functions.logger.warn('Skipping malformed credential ID during registration options.', {
+          uid: decoded.uid,
+          docId: doc.id,
+          error: error.message,
+        });
+      }
+      return acc;
+    }, []);
 
     const options = generateRegistrationOptions({
       rpName,
@@ -185,6 +200,10 @@ exports.regOptions = functions
       attestationType: 'none',
       excludeCredentials,
     });
+
+    if (!options.challenge) {
+      throw new HttpError(500, 'challengeGenerationFailed', '無法產生註冊挑戰，請稍後再試。');
+    }
 
     await userRef.collection('webauthn').doc('challenge').set({
       value: options.challenge,
